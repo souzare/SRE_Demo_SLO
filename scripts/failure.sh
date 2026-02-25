@@ -1,0 +1,1 @@
+curl http://<APP_URL>/kill

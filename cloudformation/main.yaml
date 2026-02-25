@@ -1,0 +1,166 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: SRE SLO Demo - Single Task Version
+
+Parameters:
+  AppImage:
+    Type: String
+    Description: ECR image URI for app
+
+  PromImage:
+    Type: String
+    Description: ECR image URI for Prometheus
+
+  GrafanaImage:
+    Type: String
+    Description: ECR image URI for Grafana
+
+Resources:
+
+# ------------------------
+# VPC
+# ------------------------
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  Route:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref RouteTable
+
+# ------------------------
+# Security Group
+# ------------------------
+
+  ECSServiceSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP access
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 5000
+          ToPort: 5000
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 9090
+          ToPort: 9090
+          CidrIp: 0.0.0.0/0
+
+# ------------------------
+# ECS Cluster
+# ------------------------
+
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+
+# ------------------------
+# IAM Role
+# ------------------------
+
+  ECSExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+# ------------------------
+# Task Definition
+# ------------------------
+
+  DemoTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: sre-slo-demo
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: 1024
+      Memory: 2048
+      NetworkMode: awsvpc
+      ExecutionRoleArn: !GetAtt ECSExecutionRole.Arn
+      ContainerDefinitions:
+
+        - Name: app
+          Image: !Ref AppImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 5000
+
+        - Name: prometheus
+          Image: !Ref PromImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 9090
+
+        - Name: grafana
+          Image: !Ref GrafanaImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 3000
+
+# ------------------------
+# ECS Service
+# ------------------------
+
+  DemoService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ECSCluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      TaskDefinition: !Ref DemoTaskDefinition
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref PublicSubnet
+          SecurityGroups:
+            - !Ref ECSServiceSG
+
+Outputs:
+  Message:
+    Value: Stack criada. Verifique a task para obter o IP público.

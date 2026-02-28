@@ -1,24 +1,24 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: SRE SLO Demo - Single Task Version
+Description: SRE SLO Demo - ECS + Cloud Map Service Discovery
 
 Parameters:
   AppImage:
     Type: String
-    Description: ECR image URI for app
+    Description: ECR URI for App image
 
   PromImage:
     Type: String
-    Description: ECR image URI for Prometheus
+    Description: ECR URI for Prometheus image
 
   GrafanaImage:
     Type: String
-    Description: ECR image URI for Grafana
+    Description: ECR URI for Grafana image
 
 Resources:
 
-# ------------------------
+# =========================================
 # VPC
-# ------------------------
+# =========================================
 
   VPC:
     Type: AWS::EC2::VPC
@@ -62,16 +62,17 @@ Resources:
       SubnetId: !Ref PublicSubnet
       RouteTableId: !Ref RouteTable
 
-# ------------------------
-# Security Group
-# ------------------------
+# =========================================
+# SECURITY GROUP
+# =========================================
 
   ECSServiceSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Allow HTTP access
+      GroupDescription: Allow HTTP and internal traffic
       VpcId: !Ref VPC
       SecurityGroupIngress:
+        # External access
         - IpProtocol: tcp
           FromPort: 3000
           ToPort: 3000
@@ -84,22 +85,35 @@ Resources:
           FromPort: 9090
           ToPort: 9090
           CidrIp: 0.0.0.0/0
+  
+  ECSInternalIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ECSServiceSG
+      IpProtocol: tcp
+      FromPort: 5000
+      ToPort: 5000
+      SourceSecurityGroupId: !Ref ECSServiceSG
 
-# ------------------------
-# ECS Cluster
-# ------------------------
+# =========================================
+# ECS CLUSTER
+# =========================================
 
   ECSCluster:
     Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: sre-slo-demo-cluster
 
-# ------------------------
-# IAM Role
-# ------------------------
+# =========================================
+# IAM ROLE
+# =========================================
 
   ECSExecutionRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: sre-slo-ecs-execution-role
       AssumeRolePolicyDocument:
+        Version: "2012-10-17"
         Statement:
           - Effect: Allow
             Principal:
@@ -108,14 +122,79 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
 
-# ------------------------
-# Task Definition
-# ------------------------
+# =========================================
+# CLOUD MAP NAMESPACE
+# =========================================
 
-  DemoTaskDefinition:
+  ServiceDiscoveryNamespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+      Name: sre.local
+      Vpc: !Ref VPC
+
+  AppDiscoveryService:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: sre-app-service
+      NamespaceId: !Ref ServiceDiscoveryNamespace
+      DnsConfig:
+        DnsRecords:
+          - Type: A
+            TTL: 10
+        RoutingPolicy: MULTIVALUE
+
+# =========================================
+# TASK DEFINITION - APP
+# =========================================
+
+  AppTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
-      Family: sre-slo-demo
+      Family: sre-app-task
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: 256
+      Memory: 512
+      NetworkMode: awsvpc
+      ExecutionRoleArn: !GetAtt ECSExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: app
+          Image: !Ref AppImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 5000
+
+# =========================================
+# SERVICE - APP
+# =========================================
+
+  AppService:
+    Type: AWS::ECS::Service
+    DependsOn: AppDiscoveryService
+    Properties:
+      Cluster: !Ref ECSCluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      ServiceName: sre-app-service
+      TaskDefinition: !Ref AppTaskDefinition
+      ServiceRegistries:
+        - RegistryArn: !GetAtt AppDiscoveryService.Arn
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref PublicSubnet
+          SecurityGroups:
+            - !Ref ECSServiceSG
+
+# =========================================
+# TASK DEFINITION - OBSERVABILITY
+# =========================================
+
+  ObservabilityTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: sre-observability-task
       RequiresCompatibilities:
         - FARGATE
       Cpu: 1024
@@ -123,13 +202,6 @@ Resources:
       NetworkMode: awsvpc
       ExecutionRoleArn: !GetAtt ECSExecutionRole.Arn
       ContainerDefinitions:
-
-        - Name: app
-          Image: !Ref AppImage
-          Essential: true
-          PortMappings:
-            - ContainerPort: 5000
-
         - Name: prometheus
           Image: !Ref PromImage
           Essential: true
@@ -142,17 +214,18 @@ Resources:
           PortMappings:
             - ContainerPort: 3000
 
-# ------------------------
-# ECS Service
-# ------------------------
+# =========================================
+# SERVICE - OBSERVABILITY
+# =========================================
 
-  DemoService:
+  ObservabilityService:
     Type: AWS::ECS::Service
     Properties:
       Cluster: !Ref ECSCluster
       LaunchType: FARGATE
       DesiredCount: 1
-      TaskDefinition: !Ref DemoTaskDefinition
+      ServiceName: sre-observability-service
+      TaskDefinition: !Ref ObservabilityTaskDefinition
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED
@@ -162,5 +235,8 @@ Resources:
             - !Ref ECSServiceSG
 
 Outputs:
+  Namespace:
+    Value: sre.local
+
   Message:
-    Value: Stack criada. Verifique a task para obter o IP público.
+    Value: Stack criada. Use o IP da task de observability para acessar Grafana.

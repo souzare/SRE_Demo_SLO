@@ -1,8 +1,8 @@
 aws cloudformation deploy \
-  --template-file cloudformation/main.yaml \
+  --template-file /Users/doctor/gitrepo/SRE_Demo_SLO/cloudformation/main.yaml \
   --stack-name sre-slo-demo \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
-    AppImage=<ECR_APP_URI> \
-    PromImage=<ECR_PROM_URI> \
-    GrafanaImage=<ECR_GRAFANA_URI>
+    AppImage=640388149711.dkr.ecr.us-east-1.amazonaws.com/sre-app:latest \
+    PromImage=640388149711.dkr.ecr.us-east-1.amazonaws.com/sre-prometheus:latest \
+    GrafanaImage=640388149711.dkr.ecr.us-east-1.amazonaws.com/sre-grafana:latest

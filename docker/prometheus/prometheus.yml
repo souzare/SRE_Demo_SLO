@@ -3,5 +3,8 @@ global:
 
 scrape_configs:
   - job_name: "app"
-    static_configs:
-      - targets: ["localhost:5000"]
+    dns_sd_configs:
+      - names:
+          - sre-app-service.sre.local
+        type: A
+        port: 5000
